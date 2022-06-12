@@ -29,16 +29,22 @@ function screenEmails() {
 
   let pastSecs =
     // Every hour, do a deep search.
-    new Date().getMinutes() === 0 ?
-    pastDays * 24 * 60 * 60 :
-    // Every 5 minutes, search the past week.
-    new Date().getMinutes() % 5 === 0 ?
-    7 * 24 * 60 * 60 :
-    // All other minutes, only search the past 3 minutes.
-    3 * 60;
-  
+    new Date().getMinutes() === 0
+      ? pastDays * 24 * 60 * 60
+      : // Every 5 minutes, search the past week.
+      new Date().getMinutes() % 5 === 0
+      ? 7 * 24 * 60 * 60
+      : // All other minutes, only search the past 3 minutes.
+        3 * 60;
+
   // Iterate through threads in the main inbox view from the past 10 minutes.
-  let threads = GmailApp.search(`((category:primary OR category:forums) after:${now() - pastSecs}) OR (in:inbox label:!-screenme)`, 0, limit);
+  let threads = GmailApp.search(
+    `((category:primary OR category:forums) after:${
+      now() - pastSecs
+    }) OR (in:inbox label:!-screenme)`,
+    0,
+    limit
+  );
   for (let thread of threads) {
     let firstMessage = thread.getMessages()[0];
     // `sender` actually refers to the email address of the other person
@@ -47,27 +53,26 @@ function screenEmails() {
     let sender = isMessageFromMe(firstMessage)
       ? extractEmail(firstMessage.getTo().split(",")[0])
       : extractEmail(firstMessage.getFrom());
-      
+
     let labels = categorizeLabels(thread.getLabels());
 
-    log("----------")
+    log("----------");
     log(thread.getLastMessageDate(), sender, thread.getFirstMessageSubject());
     log("labels", labels);
-    
+
     // If the email already has manual labels, no need to examine the past.
     if (labels.manual.length > 0) {
       if (!thread.isUnread()) {
-        log("Email is read and has existing labels. => Archiving email.")
+        log("Email is read and has existing labels. => Archiving email.");
         // If it is read, it can be safely archived, since it's filed away properly.
         if (thread.hasStarredMessages()) {
-          log("Actually, thread is starred! => Doing nothing.")  
+          log("Actually, thread is starred! => Doing nothing.");
         } else {
           if (!DRY_RUN) thread.addLabel(archiveLabel);
           if (!DRY_RUN) thread.moveToArchive();
         }
-      }
-      else {
-        log("Email is unread and has labels. => Doing nothing.")
+      } else {
+        log("Email is unread and has labels. => Doing nothing.");
         // Otherwise, leave it alone. It's ready to be read.
       }
       continue;
@@ -78,9 +83,11 @@ function screenEmails() {
     // Look at the last time we got an email from the same sender.
     let lastEmailFromSenderQuery = `-subject:"Re: " -label:"! Screener" from:"${sender}"`;
     log("lastEmailFromSenderQuery", lastEmailFromSenderQuery);
-    let lastEmailFromSender = GmailApp
-      .search(lastEmailFromSenderQuery, 0, 2)
-      .filter(lastThread => lastThread.getId() !== thread.getId())[0];
+    let lastEmailFromSender = GmailApp.search(
+      lastEmailFromSenderQuery,
+      0,
+      2
+    ).filter((lastThread) => lastThread.getId() !== thread.getId())[0];
     let lastLabels = lastEmailFromSender
       ? categorizeLabels(lastEmailFromSender.getLabels())
       : undefined;
@@ -93,29 +100,34 @@ function screenEmails() {
         if (!DRY_RUN) thread.addLabel(pastLabel);
       }
 
-      log("We just added some labels. => Making sure it's unread.")
+      log("We just added some labels. => Making sure it's unread.");
       if (!DRY_RUN) thread.addLabel(autoLabel);
       if (!DRY_RUN) thread.markUnread();
       continue;
     }
 
     if (!lastEmailFromSender || lastLabels?.hasScreener) {
-      log("This sender doesn't have previous screened emails. => Moving to screener!");
+      log(
+        "This sender doesn't have previous screened emails. => Moving to screener!"
+      );
       if (labels.unknown.length > 0) {
-        log("Actually, thread has unknown label(s)! => Doing nothing.")  
+        log("Actually, thread has unknown label(s)! => Doing nothing.");
       } else if (thread.hasStarredMessages()) {
-        log("Actually, thread is starred! => Doing nothing.")  
+        log("Actually, thread is starred! => Doing nothing.");
       } else {
         if (!DRY_RUN) thread.addLabel(screenerLabel);
         if (thread.isUnread()) {
-          log("Not archiving because it's already read. (User probably removed it from the screener.)")  
+          log(
+            "Not archiving because it's already read. (User probably removed it from the screener.)"
+          );
         } else {
           if (!DRY_RUN) thread.moveToArchive();
         }
       }
-    }
-    else {
-      log("This sender has previous emails that don't have a label. => Doing nothing.")
+    } else {
+      log(
+        "This sender has previous emails that don't have a label. => Doing nothing."
+      );
     }
   }
 }
@@ -147,7 +159,7 @@ function categorizeLabels(labels) {
   }
 
   if (screener.length > 1) {
-    log("warning -- screener.length > 1!! this shouldn't happen")
+    log("warning -- screener.length > 1!! this shouldn't happen");
   }
 
   return {
@@ -156,12 +168,12 @@ function categorizeLabels(labels) {
     manual,
     auto,
     unknown,
-  }
+  };
 }
 
-const log = (/** @type {string[]} */...objs) => {
+const log = (/** @type {string[]} */ ...objs) => {
   return Logger.log(objs.map(JSON.stringify).join(" "));
-}
+};
 
 /**
  * @param {string} email
@@ -179,17 +191,17 @@ function extractEmail(email) {
  * @param {string} messageId
  */
 function getMessageLabelIds(messageId) {
-  return Gmail.Users.Messages.get('me', messageId).labelIds;
+  return Gmail.Users.Messages.get("me", messageId).labelIds;
 }
 
 /**
  * @param {GmailMessage} thread
  */
-function isMessageFromMe(message)  {
-    let messageLabelIds = getMessageLabelIds(message.getId());
-    return new Set(messageLabelIds).has("SENT");
+function isMessageFromMe(message) {
+  let messageLabelIds = getMessageLabelIds(message.getId());
+  return new Set(messageLabelIds).has("SENT");
 }
 
 function now() {
-  return Math.floor(new Date().getTime() / 1000)
+  return Math.floor(new Date().getTime() / 1000);
 }
