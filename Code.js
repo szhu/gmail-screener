@@ -38,7 +38,7 @@ function screenEmails() {
     3 * 60;
   
   // Iterate through threads in the main inbox view from the past 10 minutes.
-  let threads = GmailApp.search(`category:primary after:${now() - pastSecs}`, 0, limit);
+  let threads = GmailApp.search(`((category:primary OR category:forums) after:${now() - pastSecs}) OR (in:inbox label:!-screenme)`, 0, limit);
   for (let thread of threads) {
     let firstMessage = thread.getMessages()[0];
     // `sender` actually refers to the email address of the other person
@@ -57,7 +57,7 @@ function screenEmails() {
     // If the email already has manual labels, no need to examine the past.
     if (labels.manual.length > 0) {
       if (!thread.isUnread()) {
-        log("Email is read and has existing labels (including possibly Screener). => Archiving email.")
+        log("Email is read and has existing labels. => Archiving email.")
         // If it is read, it can be safely archived, since it's filed away properly.
         if (thread.hasStarredMessages()) {
           log("Actually, thread is starred! => Doing nothing.")  
@@ -100,7 +100,7 @@ function screenEmails() {
     }
 
     if (!lastEmailFromSender || lastLabels?.hasScreener) {
-      log("This sender doesn't have previous emails, or the previous email is in the screener. => Moving to screener!");
+      log("This sender doesn't have previous screened emails. => Moving to screener!");
       if (labels.unknown.length > 0) {
         log("Actually, thread has unknown label(s)! => Doing nothing.")  
       } else if (thread.hasStarredMessages()) {
@@ -109,6 +109,7 @@ function screenEmails() {
         if (!DRY_RUN) thread.addLabel(screenerLabel);
         if (thread.isUnread()) {
           log("Not archiving because it's already read. (User probably removed it from the screener.)")  
+        } else {
           if (!DRY_RUN) thread.moveToArchive();
         }
       }
@@ -135,10 +136,10 @@ function categorizeLabels(labels) {
   for (let label of labels) {
     let labelName = label.getName();
     if (labelName === screenerLabelName) {
-      screener.push(label);
+      screener.push();
     } else if (labelName.match(/^\uD83C\uDFF7/)) {
       manual.push(label);
-    } else if (labelName.match(/^!|\uD83D\uDDD3|\uD83D[\uDCE5\uDCE4]\//)) {
+    } else if (labelName.match(/^!|^\uD83D\uDDD3$|^\uD83D[\uDCE5\uDCE4]\//)) {
       auto.push(label);
     } else {
       unknown.push(label);
