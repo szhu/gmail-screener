@@ -159,11 +159,9 @@ function categorizeLabels(labels) {
   }
 }
 
-/**
- * @param {string[]} args
- */
-const log = (...objs) => Logger.log(objs.map(JSON.stringify).join(" "))
-
+const log = (/** @type {string[]} */...objs) => {
+  return Logger.log(objs.map(JSON.stringify).join(" "));
+}
 
 /**
  * @param {string} email
