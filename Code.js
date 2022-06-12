@@ -102,12 +102,15 @@ function screenEmails() {
     if (!lastEmailFromSender || lastLabels?.hasScreener) {
       log("This sender doesn't have previous emails, or the previous email is in the screener. => Moving to screener!");
       if (labels.unknown.length > 0) {
-        log("Actually, thread unknown label(s)! => Doing nothing.")  
+        log("Actually, thread has unknown label(s)! => Doing nothing.")  
       } else if (thread.hasStarredMessages()) {
         log("Actually, thread is starred! => Doing nothing.")  
       } else {
         if (!DRY_RUN) thread.addLabel(screenerLabel);
-        if (!DRY_RUN) thread.moveToArchive();
+        if (thread.isUnread()) {
+          log("Not archiving because it's already read. (User probably removed it from the screener.)")  
+          if (!DRY_RUN) thread.moveToArchive();
+        }
       }
     }
     else {
