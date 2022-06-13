@@ -5,16 +5,22 @@
 const LabelLearnAddress = Label("📛 Learn");
 
 /**
+ * If a thread has this label, the thread's other labels should be applied to
+ * future messages from this sender's domain.
+ */
+const LabelLearnDomain = Label("📛 Learn (Domain)");
+
+/**
  * If a thread has this label, we should process it in a rate-limited way.
  */
 const LabelTodo = Label("📛 Todo");
 
-/**
- * If a thread has this label, we should process it as soon as possible.
- *
- * @deprecated Not implemented yet.
- */
-const LabelTodoManual = Label("📛 Todo (Manual)");
+// /**
+//  * If a thread has this label, we should process it as soon as possible.
+//  *
+//  * @deprecated Not implemented yet.
+//  */
+// const LabelTodoManual = Label("📛 Todo (Manual)");
 
 /**
  * The screener will mark processed threads with this label.
@@ -69,6 +75,8 @@ const LabelIconAutoArchiveWhenRead = "📁";
 
 function ScreenEmails() {
   for (let thread of GetTodoThreads()) {
+    log("---------");
+
     /** @type {ThreadScreenState} */
     let state = {
       thread,
@@ -84,41 +92,60 @@ function ScreenEmails() {
     getThreadIsStarred(state);
     getThreadIsRead(state);
 
-    log("---------");
     log(
       "thread",
       thread.getLastMessageDate(),
       state.threadContactAddress,
       thread.getFirstMessageSubject()
     );
-    log(
-      "referenceThread",
-      state.referenceThread?.getLastMessageDate(),
-      state.referenceThread?.getFirstMessageSubject()
-    );
-    log(
-      "referenceLabels",
-      state.referenceLabels?.map((x) => x.getName())
-    );
+    // log(
+    //   "referenceThread",
+    //   state.referenceThread?.getLastMessageDate(),
+    //   state.referenceThread?.getFirstMessageSubject()
+    // );
+    // log(
+    //   "referenceLabels",
+    //   state.referenceLabels?.map((x) => x.getName())
+    // );
     log(
       "labelsToApply",
       state.labelsToApply.mutex.map((x) => x.getName()),
       state.labelsToApply.other.map((x) => x.getName())
     );
-    log("unmergedActions", state.unmergedActions);
+    // log("unmergedActions", state.unmergedActions);
     log("actionsToApply", state.actionsToApply);
 
     // if (1 === 1) continue;
 
+    thread.removeLabel(LabelScreenedOut.object);
+    thread.removeLabel(LabelUncategorized.object);
+
     applyLabels(state);
     applyActions(state);
 
-    if (state.actionsToApply.archive !== "WhenRead") {
+    if (!(state.actionsToApply.archive === "WhenRead" && !state.threadIsRead)) {
       thread.removeLabel(LabelTodo.object);
     }
 
     thread.addLabel(LabelDone.object);
   }
+}
+
+/**
+ * @param {ReturnType<typeof Label>} label
+ */
+function TallyLabel(label = LabelScreenedOut) {
+  let addresses = [];
+  let threads = GmailApp.search(label.query);
+  for (let thread of threads) {
+    let sender = thread.getMessages()[0].getFrom();
+    let senderAddress = StringHelpers.extractEmail(sender);
+    addresses.push(senderAddress);
+  }
+
+  CollectionHelpers.sortUsingMap(addresses, StringHelpers.reverseDomainEmail);
+
+  Logger.log(addresses.join("\n"));
 }
 
 /**
@@ -159,8 +186,55 @@ function getThreadLabels(state) {
  */
 function getReferenceThread(state) {
   let query = `${LabelLearnAddress.query} to:${state.threadContactAddress} OR from:${state.threadContactAddress}`;
+  console.log("query", query);
   state.referenceThreads = GmailApp.search(query, 0, 2);
   state.referenceThread = state.referenceThreads[0];
+
+  if (state.referenceThread == null) {
+    let domain = state.threadContactAddress
+      .replace(/^.*@/, "")
+      // Emails from Credit Karma always come from a different domain every
+      // time. I can't tell if they've set it up this way to make their emails
+      // intentionally hard to filter. Some examples:
+      // - notifications@tax6.creditkarma.com
+      // - notifications@notifications2.creditkarma.com
+      // - mail@mail18.creditkarma.com
+      // - notifications@mail3.creditkarma.com
+      // - notifications@mail10.creditkarma.com
+      //
+      // The following filter will turn these domains into just
+      // "creditkarma.com". I originally considering being generic and targeting
+      // all domains of the form aaaaa11.*.*, but that could result in false
+      // positives, like area120.google.com.
+      .replace(/[a-z]+[0-9]+\.(creditkarma\.com)$/i, "$1");
+    // The naive way to write the query would be to follow the same format as
+    // the one for exact matching. However, a problem arises when the incoming
+    // email is from `gmail.com` or `nyu.edu` or other domains of mine. When
+    // this happens, a lot of the "Learn"-labeled emails will match the query.
+    // To avoid false positives, we apply a stricter filter.
+    query = `${LabelLearnDomain.query} -is:sent from:${domain}`;
+    console.log("query", query);
+    state.referenceThreads = GmailApp.search(query, 0, 2);
+    state.referenceThread = state.referenceThreads[0];
+
+    // If the current thread is from google.com, we want to look for a reference
+    // thread from specifically google.com, and not txt.voice.google.com or any
+    // other subdomain. However, there is no way to construct such a query.
+    // Instead, we'll just check whether the reference thread matches the domain
+    // exactly, and send it to Uncategorized/Screened Out if it doesn't.
+    //
+    // The user can work around this issue by making sure the reference thread
+    // for google.com is newer than the reference thread for
+    // txt.voice.google.com.
+    if (state.referenceThread) {
+      let from = state.referenceThread.getMessages()[0].getFrom();
+      let fromDomain = StringHelpers.extractEmail(from).replace(/^.*@/, "");
+      if (fromDomain !== domain) {
+        state.referenceThread = undefined;
+      }
+    }
+  }
+
   return state.referenceThread != null;
 }
 
@@ -194,7 +268,7 @@ function updateLabelsAndActionsToApply(state) {
 
   if (state.referenceLabels != null) {
     for (let label of state.referenceLabels) {
-      let name = label.getName().replace(/.*\//, "");
+      let name = label.getName(); //.replace(/.*\//, "");
       if (name.indexOf(LabelIconAutoMutex) !== -1) {
         state.labelsToApply.mutex.push(label);
         state.unmergedActions.push({
@@ -210,34 +284,35 @@ function updateLabelsAndActionsToApply(state) {
         state.labelsToApply.other.push(label);
       }
     }
-  } else if (state.toContactThreads != null) {
-    if (state.toContactThreads.length === 0) {
-      state.labelsToApply.mutex.push(LabelScreenedOut.object);
-      state.unmergedActions.push({
-        read: false,
-        archive: "Immediately",
-      });
-    }
-  } else {
-    throw new Error("Unreachable code.");
   }
 
   if (state.labelsToApply.mutex.length === 0) {
     getThreadLabels(state);
     let alreadyHasMutex = false;
     for (let label of state.threadLabels) {
-      let name = label.getName().replace(/.*\//, "");
+      let name = label.getName(); //.replace(/.*\//, "");
       if (name.indexOf(LabelIconAutoMutex) !== -1) {
         alreadyHasMutex = true;
         break;
       }
     }
     if (!alreadyHasMutex) {
-      state.labelsToApply.mutex.push(LabelUncategorized.object);
-      state.unmergedActions.push({
-        read: false,
-        archive: false,
-      });
+      if (
+        state.toContactThreads != null &&
+        state.toContactThreads.length === 0
+      ) {
+        state.labelsToApply.mutex.push(LabelScreenedOut.object);
+        state.unmergedActions.push({
+          read: false,
+          archive: "Immediately",
+        });
+      } else {
+        state.labelsToApply.mutex.push(LabelUncategorized.object);
+        state.unmergedActions.push({
+          read: false,
+          archive: false,
+        });
+      }
     }
   }
 
@@ -320,6 +395,16 @@ const StringHelpers = {
       return email.split(",")[0];
     }
   },
+
+  /**
+   * @param {string} email
+   */
+  reverseDomainEmail(email) {
+    email = email.replace("@", "..");
+    let parts = email.split(".");
+    parts.reverse();
+    return parts.join(".");
+  },
 };
 
 const CollectionHelpers = {
@@ -351,6 +436,26 @@ const CollectionHelpers = {
       }
     }
     return max;
+  },
+
+  /**
+   * @template T
+   * @param {T[]} collection
+   * @param {(item: T) => any} mapper
+   */
+  sortUsingMap(collection, mapper) {
+    let sorted = collection.sort((a, b) => {
+      let aValue = mapper(a);
+      let bValue = mapper(b);
+      if (aValue < bValue) {
+        return -1;
+      } else if (aValue > bValue) {
+        return 1;
+      } else {
+        return 0;
+      }
+    });
+    return sorted;
   },
 };
 
