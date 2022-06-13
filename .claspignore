@@ -1,3 +1,4 @@
 autocomplete.js
-package.json
 package-lock.json
+package.json
+types.d.ts

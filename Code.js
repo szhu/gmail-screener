@@ -1,207 +1,383 @@
-// function test() {
-//   for (let thread of GmailApp.search("in:sent")) {
-//     let firstMessage = thread.getMessages()[0];
-//     let sender = isMessageFromMe(firstMessage)
-//       ? extractEmail(firstMessage.getTo())
-//       : extractEmail(firstMessage.getFrom());
-//     if (isMessageFromMe(firstMessage)) {
-//       log(firstMessage.getTo(), firstMessage.getSubject());
-//       log(isMessageFromMe(firstMessage), sender);
-//     }
-//   }
-// }
-
-const DRY_RUN = false;
-
-const pastDays = 365;
-const limit = 20;
-
-const screenerLabelName = "! Screener";
+/**
+ * If a thread has this label, the thread's other labels should be applied to
+ * future messages from this sender's address.
+ */
+const LabelLearnAddress = Label("📛 Learn");
 
 /**
- * Screen emails from unknown senders out of the Primary Inbox and into a label named "Screener".
- * Inspired by Hey Email's Screener feature.
+ * If a thread has this label, we should process it in a rate-limited way.
  */
-function screenEmails() {
-  let screenerLabel = GmailApp.getUserLabelByName(screenerLabelName);
-  let autoLabel = GmailApp.getUserLabelByName("! Screener Autolabeled");
-  let archiveLabel = GmailApp.getUserLabelByName("! Screener Autoarchived");
+const LabelTodo = Label("📛 Todo");
 
-  let pastSecs =
-    // Every hour, do a deep search.
-    new Date().getMinutes() === 0
-      ? pastDays * 24 * 60 * 60
-      : // Every 5 minutes, search the past week.
-      new Date().getMinutes() % 5 === 0
-      ? 7 * 24 * 60 * 60
-      : // All other minutes, only search the past 3 minutes.
-        3 * 60;
+/**
+ * If a thread has this label, we should process it as soon as possible.
+ *
+ * @deprecated Not implemented yet.
+ */
+const LabelTodoManual = Label("📛 Todo (Manual)");
 
-  // Iterate through threads in the main inbox view from the past 10 minutes.
-  let threads = GmailApp.search(
-    `((category:primary OR category:forums) after:${
-      now() - pastSecs
-    }) OR (in:inbox label:!-screenme)`,
-    0,
-    limit
-  );
-  for (let thread of threads) {
-    let firstMessage = thread.getMessages()[0];
-    // `sender` actually refers to the email address of the other person
-    // (the person who is not the current user). For users who mostly receive emails, this
-    // would in most cases be the sender.
-    let sender = isMessageFromMe(firstMessage)
-      ? extractEmail(firstMessage.getTo().split(",")[0])
-      : extractEmail(firstMessage.getFrom());
+/**
+ * The screener will mark processed threads with this label.
+ */
+const LabelDone = Label("📛 Done");
 
-    let labels = categorizeLabels(thread.getLabels());
+/**
+ * Each thread should have at least one "main label", which is a label
+ * containing this emoji. If a thread doesn't have a main label by the time we
+ * finish processing it, we'll add the Uncategorized label.
+ */
+const LabelIconAutoMutex = "🏡";
 
-    log("----------");
-    log(thread.getLastMessageDate(), sender, thread.getFirstMessageSubject());
-    log("labels", labels);
+/**
+ * Labels with this emoji are non-main labels, but that still should be
+ * auto-applied.
+ */
+const LabelIconAuto = "🏷";
 
-    // If the email already has manual labels, no need to examine the past.
-    if (labels.manual.length > 0) {
-      if (!thread.isUnread()) {
-        log("Email is read and has existing labels. => Archiving email.");
-        // If it is read, it can be safely archived, since it's filed away properly.
-        if (thread.hasStarredMessages()) {
-          log("Actually, thread is starred! => Doing nothing.");
-        } else {
-          if (!DRY_RUN) thread.addLabel(archiveLabel);
-          if (!DRY_RUN) thread.moveToArchive();
-        }
-      } else {
-        log("Email is unread and has labels. => Doing nothing.");
-        // Otherwise, leave it alone. It's ready to be read.
-      }
-      continue;
-    }
+/**
+ * The label that we use to indicate that a thread doesn't have a main label.
+ */
+const LabelUncategorized = Label("‼️ Uncategorized");
 
-    // If the email is unlabeled...
+/**
+ * The label we use to indicate that a thread is from an unknown sender.
+ */
+const LabelScreenedOut = Label("‼️ Screened Out");
 
-    // Look at the last time we got an email from the same sender.
-    let lastEmailFromSenderQuery = `-subject:"Re: " -label:"! Screener" from:"${sender}"`;
-    log("lastEmailFromSenderQuery", lastEmailFromSenderQuery);
-    let lastEmailFromSender = GmailApp.search(
-      lastEmailFromSenderQuery,
-      0,
-      2
-    ).filter((lastThread) => lastThread.getId() !== thread.getId())[0];
-    let lastLabels = lastEmailFromSender
-      ? categorizeLabels(lastEmailFromSender.getLabels())
-      : undefined;
-    log("lastLabels", lastLabels);
+/**
+ * When applying a label with this emoji, mark the message as read.
+ *
+ * Useful for emails where we don't care about the read status.
+ */
+const LabelIconAutoRead = "📖";
 
-    // If the last email from the sender has label(s), apply the same label(s).
-    if (lastLabels && lastLabels.manual.length > 0) {
-      for (let pastLabel of lastLabels.manual) {
-        log(["Adding label", pastLabel.getName()]);
-        if (!DRY_RUN) thread.addLabel(pastLabel);
-      }
+/**
+ * When applying a label with this emoji, remove it from the inbox.
+ *
+ * Useful for emails that we don't want to see by default.
+ */
+const LabelIconAutoArchive = "📂";
 
-      log("We just added some labels. => Making sure it's unread.");
-      if (!DRY_RUN) thread.addLabel(autoLabel);
-      if (!DRY_RUN) thread.markUnread();
-      continue;
-    }
+/**
+ * When applying a label with this emoji, keep it in the inbox, but remove it
+ * from the Inbox as soon as it is read.
+ *
+ * Useful for emails where we don't want to separately track "read" and
+ * "archived" statuses.
+ */
+const LabelIconAutoArchiveWhenRead = "📁";
 
-    if (!lastEmailFromSender || lastLabels?.hasScreener) {
-      log(
-        "This sender doesn't have previous screened emails. => Moving to screener!"
-      );
-      if (labels.unknown.length > 0) {
-        log("Actually, thread has unknown label(s)! => Doing nothing.");
-      } else if (thread.hasStarredMessages()) {
-        log("Actually, thread is starred! => Doing nothing.");
-      } else {
-        if (!DRY_RUN) thread.addLabel(screenerLabel);
-        if (thread.isUnread()) {
-          log(
-            "Not archiving because it's already read. (User probably removed it from the screener.)"
-          );
-        } else {
-          if (!DRY_RUN) thread.moveToArchive();
-        }
-      }
+function ScreenEmails() {
+  for (let thread of GetTodoThreads()) {
+    /** @type {ThreadScreenState} */
+    let state = {
+      thread,
+    };
+
+    getThreadContactAddress(state);
+    if (getReferenceThread(state)) {
+      getReferenceLabels(state);
     } else {
-      log(
-        "This sender has previous emails that don't have a label. => Doing nothing."
-      );
+      getToContactThreads(state);
     }
+    updateLabelsAndActionsToApply(state);
+    getThreadIsStarred(state);
+    getThreadIsRead(state);
+
+    log("---------");
+    log(
+      "thread",
+      thread.getLastMessageDate(),
+      state.threadContactAddress,
+      thread.getFirstMessageSubject()
+    );
+    log(
+      "referenceThread",
+      state.referenceThread?.getLastMessageDate(),
+      state.referenceThread?.getFirstMessageSubject()
+    );
+    log(
+      "referenceLabels",
+      state.referenceLabels?.map((x) => x.getName())
+    );
+    log(
+      "labelsToApply",
+      state.labelsToApply.mutex.map((x) => x.getName()),
+      state.labelsToApply.other.map((x) => x.getName())
+    );
+    log("unmergedActions", state.unmergedActions);
+    log("actionsToApply", state.actionsToApply);
+
+    // if (1 === 1) continue;
+
+    applyLabels(state);
+    applyActions(state);
+
+    if (state.actionsToApply.archive !== "WhenRead") {
+      thread.removeLabel(LabelTodo.object);
+    }
+
+    thread.addLabel(LabelDone.object);
   }
 }
 
 /**
- * @param {GmailLabel[]} labels
+ * @return {GmailThread[]}
  */
-function categorizeLabels(labels) {
-  /** @type {GmailLabel[]} */
-  let screener = [];
-  /** @type {GmailLabel[]} */
-  let manual = [];
-  /** @type {GmailLabel[]} */
-  let auto = [];
-  /** @type {GmailLabel[]} */
-  let unknown = [];
+function GetTodoThreads() {
+  return LabelTodo.object.getThreads();
+}
 
-  for (let label of labels) {
-    let labelName = label.getName();
-    if (labelName === screenerLabelName) {
-      screener.push();
-    } else if (labelName.match(/^\uD83C\uDFF7/)) {
-      manual.push(label);
-    } else if (labelName.match(/^!|^\uD83D\uDDD3$|^\uD83D[\uDCE5\uDCE4]\//)) {
-      auto.push(label);
-    } else {
-      unknown.push(label);
+/**
+ * @param {ThreadScreenState} state
+ * @return {asserts state is S<"threadContactAddress">}
+ */
+function getThreadContactAddress(state) {
+  // The reason we use the first message instead of the last message is because
+  // the last message could just be a forwarded-ish message to keep someone else
+  // in the loop. It's not representative of who the overall conversation was
+  // with.
+  let firstMessage = (state.threadFirstMessage = state.thread.getMessages()[0]);
+  state.threadFirstMessageIsSent = GmailHelpers.isMessageFromMe(firstMessage);
+
+  state.threadContactAddress = GmailHelpers.isMessageFromMe(firstMessage)
+    ? StringHelpers.extractEmail(firstMessage.getTo().split(",")[0])
+    : StringHelpers.extractEmail(firstMessage.getFrom());
+}
+
+/**
+ * @param {S} state
+ * @return {asserts state is S<"threadLabels">}
+ */
+function getThreadLabels(state) {
+  state.threadLabels = state.thread.getLabels();
+}
+
+/**
+ * @param {S<"threadContactAddress">} state
+ * @return {state is S<"referenceThread">}
+ */
+function getReferenceThread(state) {
+  let query = `${LabelLearnAddress.query} to:${state.threadContactAddress} OR from:${state.threadContactAddress}`;
+  state.referenceThreads = GmailApp.search(query, 0, 2);
+  state.referenceThread = state.referenceThreads[0];
+  return state.referenceThread != null;
+}
+
+/**
+ * @param {S<"referenceThread">} state
+ * @return {asserts state is S<"referenceLabels">}
+ */
+function getReferenceLabels(state) {
+  state.referenceLabels = state.referenceThread.getLabels();
+}
+
+/**
+ * @param {S} state
+ * @return {asserts state is S<"toContactThreads">}
+ */
+function getToContactThreads(state) {
+  let query = `to:${state.threadContactAddress}`;
+  state.toContactThreads = GmailApp.search(query, 0, 2);
+}
+
+/**
+ * @param {S<"referenceLabels"> | S<"toContactThreads">} state
+ * @return {asserts state is S<"labelsToApply" | "actionsToApply">}
+ */
+function updateLabelsAndActionsToApply(state) {
+  (state.labelsToApply = {
+    mutex: [],
+    other: [],
+  }),
+    (state.unmergedActions = []);
+
+  if (state.referenceLabels != null) {
+    for (let label of state.referenceLabels) {
+      let name = label.getName().replace(/.*\//, "");
+      if (name.indexOf(LabelIconAutoMutex) !== -1) {
+        state.labelsToApply.mutex.push(label);
+        state.unmergedActions.push({
+          read: name.indexOf(LabelIconAutoRead) !== -1 ? "Immediately" : false,
+          archive:
+            name.indexOf(LabelIconAutoArchive) !== -1
+              ? "Immediately"
+              : name.indexOf(LabelIconAutoArchiveWhenRead) !== -1
+              ? "WhenRead"
+              : false,
+        });
+      } else if (name.indexOf(LabelIconAuto) !== -1) {
+        state.labelsToApply.other.push(label);
+      }
+    }
+  } else if (state.toContactThreads != null) {
+    if (state.toContactThreads.length === 0) {
+      state.labelsToApply.mutex.push(LabelScreenedOut.object);
+      state.unmergedActions.push({
+        read: false,
+        archive: "Immediately",
+      });
+    }
+  } else {
+    throw new Error("Unreachable code.");
+  }
+
+  if (state.labelsToApply.mutex.length === 0) {
+    getThreadLabels(state);
+    let alreadyHasMutex = false;
+    for (let label of state.threadLabels) {
+      let name = label.getName().replace(/.*\//, "");
+      if (name.indexOf(LabelIconAutoMutex) !== -1) {
+        alreadyHasMutex = true;
+        break;
+      }
+    }
+    if (!alreadyHasMutex) {
+      state.labelsToApply.mutex.push(LabelUncategorized.object);
+      state.unmergedActions.push({
+        read: false,
+        archive: false,
+      });
     }
   }
 
-  if (screener.length > 1) {
-    log("warning -- screener.length > 1!! this shouldn't happen");
-  }
-
-  return {
-    onlyScreener: screener.length > 0 && manual.length === 0,
-    hasScreener: screener.length > 0,
-    manual,
-    auto,
-    unknown,
+  state.actionsToApply = {
+    read: CollectionHelpers.maxInList(
+      state.unmergedActions.map((actions) => actions.read),
+      ["Immediately", false],
+      false
+    ),
+    archive: CollectionHelpers.maxInList(
+      state.unmergedActions.map((actions) => actions.archive),
+      ["Immediately", "WhenRead", false],
+      false
+    ),
   };
 }
 
-const log = (/** @type {string[]} */ ...objs) => {
-  return Logger.log(objs.map(JSON.stringify).join(" "));
-};
-
 /**
- * @param {string} email
+ * @param {S<"labelsToApply">} state
+ * @return {asserts state is S}
  */
-function extractEmail(email) {
-  let match = email.match(/[^\s<>]+@[^\s<>]+/i);
-  if (match) {
-    return match[0];
-  } else {
-    return email.split(",")[0];
+function applyLabels(state) {
+  let labels = [...state.labelsToApply.mutex, ...state.labelsToApply.other];
+  for (let label of labels) {
+    state.thread.addLabel(label);
   }
 }
 
 /**
- * @param {string} messageId
+ * @param {S} state
+ * @return {asserts state is S<"threadIsRead">}
  */
-function getMessageLabelIds(messageId) {
-  return Gmail.Users.Messages.get("me", messageId).labelIds;
+function getThreadIsRead(state) {
+  state.threadIsRead = !state.thread.isUnread();
 }
 
 /**
- * @param {GmailMessage} thread
+ * @param {S} state
+ * @return {asserts state is S<"threadIsStarred">}
  */
-function isMessageFromMe(message) {
-  let messageLabelIds = getMessageLabelIds(message.getId());
-  return new Set(messageLabelIds).has("SENT");
+function getThreadIsStarred(state) {
+  state.threadIsStarred = state.thread.hasStarredMessages();
 }
 
-function now() {
-  return Math.floor(new Date().getTime() / 1000);
+/**
+ * @param {S<"threadIsStarred" | "threadIsRead" | "labelsToApply" | "actionsToApply">} state
+ * @return {asserts state is S<never>}
+ */
+function applyActions(state) {
+  if (!state.threadIsStarred) {
+    if (state.actionsToApply.read === "Immediately") {
+      state.thread.markRead();
+    }
+    if (
+      state.actionsToApply.archive === "Immediately" ||
+      (state.actionsToApply.archive === "WhenRead" && state.threadIsRead)
+    ) {
+      state.thread.moveToArchive();
+    }
+  }
 }
+
+/*
+ * Utils
+ */
+
+const log = (/** @type {any[]} */ ...objs) => {
+  return Logger.log(objs.map((x) => JSON.stringify(x)).join(" "));
+};
+
+const StringHelpers = {
+  /**
+   * @param {string} email
+   */
+  extractEmail(email) {
+    let match = email.match(/[^\s<>]+@[^\s<>]+/i);
+    if (match) {
+      return match[0];
+    } else {
+      return email.split(",")[0];
+    }
+  },
+};
+
+const CollectionHelpers = {
+  /**
+   * Example:
+   *
+   *     let values = ["med", "low"];
+   *     let possibleValuesInOrder = ["none", "low", "med", "hi"];
+   *     maxInList(values, possibleValuesInOrder) => "med"
+   *
+   * @template T
+   * @param {T[]} values
+   * @param {T[]} possibleValuesInOrder
+   * @param {T} defaultValue
+   */
+  maxInList(
+    values,
+    possibleValuesInOrder,
+    defaultValue = possibleValuesInOrder[0]
+  ) {
+    let max = defaultValue;
+    let maxIndex = -1;
+
+    for (let value of values) {
+      let index = possibleValuesInOrder.indexOf(value);
+      if (index !== -1 && index > maxIndex) {
+        max = value;
+        maxIndex = index;
+      }
+    }
+    return max;
+  },
+};
+
+function Label(/** @type {string} */ name) {
+  const object = GmailApp.getUserLabelByName(name);
+  const query = `label:${name.replace(/ +/g, "-")}`;
+
+  if (object == null) {
+    console.log("Can't find label", name);
+  }
+
+  return { name, object, query };
+}
+
+const GmailHelpers = {
+  /**
+   * @param {string} messageId
+   */
+  getMessageLabelIds(messageId) {
+    return Gmail.Users?.Messages?.get("me", messageId).labelIds;
+  },
+
+  /**
+   * @param {GmailMessage} message
+   */
+  isMessageFromMe(message) {
+    let messageLabelIds = this.getMessageLabelIds(message.getId());
+    return new Set(messageLabelIds).has("SENT");
+  },
+};
