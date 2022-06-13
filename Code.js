@@ -2,30 +2,30 @@
  * If a thread has this label, the thread's other labels should be applied to
  * future messages from this sender's address.
  */
-const LabelLearnAddress = Label("📛 Learn");
+const LabelLearnAddress = Label("📛/Learn");
 
 /**
  * If a thread has this label, the thread's other labels should be applied to
  * future messages from this sender's domain.
  */
-const LabelLearnDomain = Label("📛 Learn (Domain)");
+const LabelLearnDomain = Label("📛/Learn (Domain)");
 
 /**
  * If a thread has this label, we should process it in a rate-limited way.
  */
-const LabelTodo = Label("📛 Todo");
+const LabelTodo = Label("📛/Todo");
 
 // /**
 //  * If a thread has this label, we should process it as soon as possible.
 //  *
 //  * @deprecated Not implemented yet.
 //  */
-// const LabelTodoManual = Label("📛 Todo (Manual)");
+// const LabelTodoManual = Label("📛/Todo (Manual)");
 
 /**
  * The screener will mark processed threads with this label.
  */
-const LabelDone = Label("📛 Done");
+const LabelDone = Label("📛/Done");
 
 /**
  * Each thread should have at least one "main label", which is a label
