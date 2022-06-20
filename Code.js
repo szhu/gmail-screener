@@ -23,6 +23,11 @@ const LabelTodo = Label("📛/Todo");
 // const LabelTodoManual = Label("📛/Todo (Manual)");
 
 /**
+ * If a thread has this label, we should archive it if it is read.
+ */
+const LabelTodoArchiveWhenRead = Label("📛/Archive If Read");
+
+/**
  * The screener will mark processed threads with this label.
  */
 const LabelDone = Label("📛/Done");
@@ -74,6 +79,8 @@ const LabelIconAutoArchive = "📂";
 const LabelIconAutoArchiveWhenRead = "📁";
 
 function ScreenEmails() {
+  ArchiveWhenRead();
+
   for (let thread of GetTodoThreads()) {
     log("---------");
 
@@ -123,10 +130,7 @@ function ScreenEmails() {
     applyLabels(state);
     applyActions(state);
 
-    if (!(state.actionsToApply.archive === "WhenRead" && !state.threadIsRead)) {
-      thread.removeLabel(LabelTodo.object);
-    }
-
+    thread.removeLabel(LabelTodo.object);
     thread.addLabel(LabelDone.object);
   }
 }
@@ -146,6 +150,20 @@ function TallyLabel(label = LabelScreenedOut) {
   CollectionHelpers.sortUsingMap(addresses, StringHelpers.reverseDomainEmail);
 
   Logger.log(addresses.join("\n"));
+}
+
+function ArchiveWhenRead() {
+  let threads = GmailApp.search(
+    `is:read ${LabelTodoArchiveWhenRead.query} -${LabelTodo.query}`
+  );
+  log("Archiving read threads:");
+  for (let thread of threads) {
+    log("thread", thread.getLastMessageDate(), thread.getFirstMessageSubject());
+
+    thread.moveToArchive();
+    thread.removeLabel(LabelTodoArchiveWhenRead.object);
+  }
+  log("---");
 }
 
 /**
@@ -366,11 +384,15 @@ function applyActions(state) {
     if (state.actionsToApply.read === "Immediately") {
       state.thread.markRead();
     }
-    if (
-      state.actionsToApply.archive === "Immediately" ||
-      (state.actionsToApply.archive === "WhenRead" && state.threadIsRead)
-    ) {
+    if (state.actionsToApply.archive === "Immediately") {
       state.thread.moveToArchive();
+    }
+    if (state.actionsToApply.archive === "WhenRead") {
+      if (state.threadIsRead) {
+        state.thread.moveToArchive();
+      } else {
+        state.thread.addLabel(LabelTodoArchiveWhenRead.object);
+      }
     }
   }
 }
