@@ -1,3 +1,5 @@
+let labelNotFoundErrors = 0;
+
 /**
  * If a thread has this label, the thread's other labels should be applied to
  * future messages from this sender's address.
@@ -78,6 +80,10 @@ const LabelIconAutoArchive = "📂";
  */
 const LabelIconAutoArchiveWhenRead = "📁";
 
+if (labelNotFoundErrors > 0) {
+  throw new Error("Create these labels manually and try again.");
+}
+
 function ScreenEmails() {
   ArchiveWhenRead();
 
@@ -96,7 +102,7 @@ function ScreenEmails() {
       getToContactThreads(state);
     }
     updateLabelsAndActionsToApply(state);
-    getThreadIsStarred(state);
+    // getThreadIsStarred(state);
     getThreadIsRead(state);
 
     log(
@@ -486,7 +492,8 @@ function Label(/** @type {string} */ name) {
   const query = `label:${name.replace(/ +/g, "-")}`;
 
   if (object == null) {
-    console.log("Can't find label", name);
+    console.error("Can't find label:", name);
+    labelNotFoundErrors++;
   }
 
   return { name, object, query };
