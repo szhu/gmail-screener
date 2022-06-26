@@ -508,10 +508,22 @@ const GmailHelpers = {
   },
 
   /**
+   * Note: This will return false for scheduled messages. Use `isMessageFromMe`
+   * to check whether the message will eventually be in "Sent".
+   *
+   * @param {GmailMessage} message
+   */
+  isMessageInSent(message) {
+    let messageLabelIds = this.getMessageLabelIds(message.getId());
+    return new Set(messageLabelIds).has("SENT");
+  },
+
+  /**
    * @param {GmailMessage} message
    */
   isMessageFromMe(message) {
-    let messageLabelIds = this.getMessageLabelIds(message.getId());
-    return new Set(messageLabelIds).has("SENT");
+    let id = message.getHeader("message-id");
+    let results = GmailApp.search(`from:me rfc822msgid:${JSON.stringify(id)}`);
+    return results.length > 0;
   },
 };
