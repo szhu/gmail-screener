@@ -523,7 +523,9 @@ const GmailHelpers = {
    */
   isMessageFromMe(message) {
     let id = message.getHeader("message-id");
-    let results = GmailApp.search(`from:me rfc822msgid:${JSON.stringify(id)}`);
+    let results = GmailApp.search(
+      `from:me -from:*.me rfc822msgid:${JSON.stringify(id)}`
+    );
     return results.length > 0;
   },
 };
